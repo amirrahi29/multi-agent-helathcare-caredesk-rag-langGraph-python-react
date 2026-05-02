@@ -1,5 +1,8 @@
 # Multi-Agent AI System (Python + React + LangChain + RAG)
 
+## Youtube video
+- youtube.com/watch?v=1DmdnY2Hvok&t=489s&pp=0gcJCd4KAYcqIYzv&pbjreload=102
+
 <table>
   <tr>
     <td width="40%">
