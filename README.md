@@ -22,25 +22,43 @@
   </tr>
 </table>
 
-A production-style multi-agent stack: **FastAPI** backend with LangChain / LangGraph-style orchestration, **PostgreSQL + pgvector**, and a **React** chat UI (**CareDesk**) for signed-in demo patients.
+End-to-end **multi-agent** demo: **FastAPI** + **LangGraph**-style workflow (`app/graph/pipeline.py`), **PostgreSQL + pgvector**, and a **React** chat client (**CareDesk**). Answers combine **RAG** (semantic retrieval) and **tool** paths (structured lookups); each turn returns a **pipeline trace** the UI can animate.
 
-The backend combines retrieval-augmented generation (RAG), tool-style structured lookup, routing, and a linear **pipeline trace** the UI can render step by step.
+## Contents
+
+- [Architecture overview](#architecture-overview)
+- [Agents](#agents)
+- [Tech stack](#tech-stack)
+- [Repository layout](#repository-layout)
+- [Prerequisites](#prerequisites)
+- [Quick start](#quick-start)
+- [Demo data & sign-in](#demo-data--sign-in)
+- [API](#api)
+- [Frontend (CareDesk)](#frontend-caredesk)
+- [Features](#features)
+- [Limitations](#limitations)
+- [Future improvements](#future-improvements)
+- [Author](#author)
 
 ---
 
 ## Architecture overview
 
+High-level flow (see `app/graph/pipeline.py` for the exact graph: prepare → classify → **tool | RAG** → respond):
+
 ```
 User Query
    ↓
-Query Agent (intent detection)
+Prepare / follow-up merge
    ↓
-Decision Agent (routing)
+Query Agent (intent + structured vs RAG)
+   ↓
+Decision Agent (route)
    ↓
  ├── Tool Agent (structured DB queries)
  └── RAG Agent (semantic search via pgvector)
    ↓
-Response Agent (LLM output generation)
+Response Agent (final answer)
 ```
 
 ---
@@ -49,19 +67,22 @@ Response Agent (LLM output generation)
 
 | Agent | Role |
 |--------|------|
-| **Query** | Detects intent and classifies structured vs RAG. |
-| **Decision** | Routes to tool or RAG. |
-| **Tool** | Runs structured queries on demo data (orders, payments, etc.). |
-| **RAG** | Semantic search over embedded documents (pgvector). |
-| **Response** | Produces the final natural-language answer. |
+| **Query** | Intent detection and query type (structured vs RAG). |
+| **Decision** | Chooses execution path from classification. |
+| **Tool** | Structured queries over demo data (orders, payments, etc.). |
+| **RAG** | Embedding search and context from pgvector. |
+| **Response** | Final user-facing answer. |
 
 ---
 
 ## Tech stack
 
-- **Backend:** Python 3.11, FastAPI, Uvicorn, LangChain-oriented graph in `app/graph`, OpenAI (LLM + embeddings), PostgreSQL + pgvector  
-- **Frontend:** React 19 (Create React App), chat UI under `frontend/src/chat/`  
-- **Data:** CSV files under `data/`; ingestion via `scripts.ingest_data`
+| Layer | Details |
+|--------|---------|
+| **Backend** | Python 3.11+, FastAPI, Uvicorn, LangGraph (`langgraph`), OpenAI (chat + embeddings) |
+| **Data store** | PostgreSQL with **pgvector** |
+| **Frontend** | React 19 (Create React App), UI modules under `frontend/src/chat/` |
+| **Demo assets** | CSVs in `data/`; optional regeneration via `scripts/generate_demo_csvs.py` |
 
 ---
 
@@ -71,20 +92,29 @@ Response Agent (LLM output generation)
 app/
 ├── agents/       # Query, decision, RAG, tool, response
 ├── core/         # Embeddings & LLM config
-├── services/     # DB, patients, vector store
-├── graph/        # Multi-agent pipeline
-└── api/          # FastAPI app (verify-patient, query)
+├── services/     # DB, patients, vector helpers
+├── graph/        # LangGraph pipeline + trace shaping
+└── api/          # FastAPI (`/verify-patient`, `/query`)
 
-frontend/         # CareDesk React app (npm start)
-scripts/          # e.g. ingest_data, demo CSV helpers
-data/             # Demo CSV datasets
+frontend/         # CareDesk (`npm start` → http://localhost:3000)
+scripts/          # ingest_data, generate_demo_csvs, etc.
+data/             # patients, orders, … (CSV)
 ```
+
+---
+
+## Prerequisites
+
+- **Python** 3.11+ and `pip`
+- **Node.js** 18+ and `npm` (for the frontend)
+- **PostgreSQL** with **pgvector** extension, database reachable with the credentials in your `.env`
+- **OpenAI API key** for LLM and embedding calls used in ingestion and chat
 
 ---
 
 ## Quick start
 
-### 1. Python environment
+### 1. Python virtual environment
 
 ```bash
 python -m venv venv
@@ -94,7 +124,7 @@ pip install -r requirements.txt
 
 ### 2. Environment variables
 
-Create a `.env` in the project root (values match your Postgres and OpenAI setup):
+Create a `.env` file in the **repository root**:
 
 ```env
 OPENAI_API_KEY=your_api_key
@@ -106,9 +136,18 @@ HOST_NAME=localhost
 PORT=5432
 ```
 
-### 3. Ingest demo data (vectors / DB)
+### 3. Ingest data into Postgres + vectors
+
+From the repo root (after DB is up and extensions are installed):
 
 ```bash
+python -m scripts.ingest_data
+```
+
+**Optional — larger synthetic CSVs** (then run ingest again):
+
+```bash
+python scripts/generate_demo_csvs.py
 python -m scripts.ingest_data
 ```
 
@@ -118,11 +157,10 @@ python -m scripts.ingest_data
 uvicorn app.api.main:app --reload
 ```
 
-Default: **http://127.0.0.1:8000** — Open **http://127.0.0.1:8000/docs** for Swagger.
+- API: **http://127.0.0.1:8000**
+- Swagger: **http://127.0.0.1:8000/docs**
 
-### 5. Run the CareDesk frontend
-
-In another terminal:
+### 5. Run CareDesk (frontend)
 
 ```bash
 cd frontend
@@ -130,14 +168,28 @@ npm install
 npm start
 ```
 
-The app expects the API at **http://localhost:8000** unless you set:
+Opens **http://localhost:3000** by default.
+
+**Point the UI at another API origin** (optional):
 
 ```bash
-# frontend/.env.local (optional)
-REACT_APP_API_URL=http://localhost:8000
+# frontend/.env.local
+REACT_APP_API_URL=http://127.0.0.1:8000
 ```
 
-CORS is configured for `http://localhost:3000` and `http://127.0.0.1:3000`.
+The backend allows CORS from `http://localhost:3000` and `http://127.0.0.1:3000`. If the UI shows network errors, confirm the API is running and `REACT_APP_API_URL` has no trailing slash.
+
+---
+
+## Demo data & sign-in
+
+Patient emails come from **`data/patients.csv`** (column `email`). Examples that ship with the default dataset:
+
+- `riya@example.com` (Riya Singh)
+- `amit@example.com`
+- `arjun@example.com`
+
+Use one of these on the **CareDesk** intro screen. Unknown addresses return **404** from `/verify-patient`.
 
 ---
 
@@ -145,39 +197,39 @@ CORS is configured for `http://localhost:3000` and `http://127.0.0.1:3000`.
 
 ### `POST /verify-patient`
 
-Checks the email against demo patients (CSV-backed). Used by the intro sign-in screen.
+Validates `email` against loaded patient records (used by the intro flow).
 
 **Request**
 
 ```json
-{ "email": "patient@example.com" }
+{ "email": "riya@example.com" }
 ```
 
 **Response (200)**
 
 ```json
 {
-  "patient_id": 1,
+  "patient_id": 2,
   "name": "Riya Singh",
-  "email": "patient@example.com",
-  "city": "…"
+  "email": "riya@example.com",
+  "city": "Mumbai"
 }
 ```
 
-Returns **404** if the email is not in the demo dataset.
+**404** — email not in the dataset.
 
 ### `POST /query`
 
-Runs the multi-agent graph for a **verified** `patient_email`. Maintains a lightweight **in-memory** conversation per `session_id` (per server process, trimmed to the last 40 messages).
+Runs the graph for the signed-in **`patient_email`**. Conversation turns are kept **in memory** per **`session_id`** (per API process, last 40 messages).
 
 **Request**
 
 ```json
 {
   "query": "Order 5102 ka status kya hai?",
-  "patient_email": "patient@example.com",
+  "patient_email": "riya@example.com",
   "last_query": null,
-  "session_id": "optional-uuid-from-client"
+  "session_id": "uuid-or-string-from-client"
 }
 ```
 
@@ -185,61 +237,59 @@ Runs the multi-agent graph for a **verified** `patient_email`. Maintains a light
 
 ```json
 {
-  "response": "…natural language answer…",
+  "response": "…",
   "route": "tool",
-  "session_id": "optional-uuid-from-client",
-  "pipeline_trace": [ /* stepped trace for the UI */ ]
+  "session_id": "uuid-or-string-from-client",
+  "pipeline_trace": []
 }
 ```
 
-Returns **403** if `patient_email` is not authorized.
+**403** — `patient_email` not authorized.
 
 ---
 
 ## Frontend (CareDesk)
 
-- Sign-in with a **demo patient email** from your data, then chat in **English or Hindi** (voice works in supported browsers; see UI copy).  
-- Toolbar shows session status, **New chat** (new `session_id`), and **Sign out** (clears stored profile on the device).  
-- Assistant turns show **pipeline steps**, then a **final answer** card with source route (e.g. tool vs RAG).  
-- Product name and API base URL are centralized in `frontend/src/chat/constants.js`.
+- **Sign-in** with a demo email from `data/patients.csv`.
+- **Toolbar:** flow legend, signed-in identity, **New chat** (new session id), **Sign out**.
+- **Chat:** pipeline steps per assistant turn, then a **final answer** card and route/source pill.
+- **Voice input** where the browser supports Web Speech API (see in-app hints).
+- **Copy / branding:** `frontend/src/chat/constants.js` (`BRAND_NAME`, API base), `frontend/src/chat/uiCopy.js`.
 
 ```bash
 cd frontend
-npm test          # unit tests
-npm run build     # production build
+npm test          # Jest + Testing Library
+npm run build     # production bundle
 ```
 
 ---
 
 ## Features
 
-- Multi-agent pipeline with explicit trace for the UI  
-- RAG + tool hybrid routing  
-- Patient-gated queries (`patient_email`)  
-- Session history on the server (per `session_id`, in-memory)  
-- React chat client with speech-to-text (where supported)  
-
----
+- LangGraph-style branching (tool vs RAG) with **pipeline trace** for the UI  
+- Patient-gated **`patient_email`** on `/query`  
+- Server-side session history keyed by **`session_id`** (in-process)  
+- React client with optional speech-to-text  
 
 ## Limitations
 
-- **Server memory** resets when the API process restarts (`SESSION_HISTORY` is in-process).  
-- **Browser chat** is local to the device (not a full account system).  
-- Demo scope: CSV / ingestion–defined patients and records, not a production EMR.  
+- **`SESSION_HISTORY` is lost** when the API process restarts.  
+- **Not** a production auth or EMR system — demo CSVs and ingestion only.  
+- **Browser storage** holds session id and patient profile locally for convenience.  
 
 ---
 
 ## Future improvements
 
-- Persistent conversation store (Redis / DB)  
-- Stronger observability and auth for real deployments  
-- Containerized deploy (Docker) and managed vector DB  
+- Durable session / chat store (database or Redis)  
+- Hardened auth and observability for real deployments  
+- Docker Compose for API + Postgres + optional frontend build  
 
 ---
 
 ## Summary
 
-This repo is an end-to-end **multi-agent + RAG demo**: ingest data, run **FastAPI**, open **CareDesk** on port 3000, sign in with a demo email, and watch the pipeline explain how each answer was produced.
+Ingest **`data/`**, run **`uvicorn app.api.main:app --reload`**, start **`frontend`** with **`npm start`**, sign in with a **`patients.csv`** email, and inspect each answer’s **pipeline** in the chat UI.
 
 ---
 

@@ -145,7 +145,7 @@ export function ChatWorkspace({
                 </div>
               </div>
             </div>
-            <p className="composer-hint">{UI_COPY.composerDisclaimer}</p>
+            {/* <p className="composer-hint">{UI_COPY.composerDisclaimer}</p> */}
           </div>
         </div>
       </div>
